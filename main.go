@@ -1,17 +1,15 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
 	"gopkg.in/telegram-bot-api.v4"
 )
 
@@ -21,6 +19,41 @@ type configuration struct {
 	WebhookRoot    string
 	LocalListen    string
 	SphinxDatabase string
+}
+
+type apiResponse struct {
+	Status  string     `json:"status"`
+	Message string     `json:"message"`
+	Data    apiRowData `json:"data"`
+}
+
+type apiRowData struct {
+	RowCount int         `json:"rowCount"`
+	Rows     []sphinxRow `json:"rows"`
+	Offset   int         `json:"offset"`
+	ReqCount int         `json:"reqCount"`
+	Total    int         `json:"total"`
+	Time     float64     `json:"time"`
+}
+
+type sphinxRow struct {
+	ID    int     `json:"id"`
+	Name  string  `json:"name"`
+	Team  string  `json:"team"`
+	Cat   string  `json:"cat"`
+	Genre string  `json:"genre"`
+	URL   string  `json:"url"`
+	Size  float64 `json:"size"`
+	Files int     `json:"files"`
+	PreAt int64   `json:"preAt"`
+}
+
+func (s sphinxRow) preAt() time.Time {
+	return time.Unix(s.PreAt, 0)
+}
+
+func (s sphinxRow) short() string {
+	return fmt.Sprintf("%s %s", s.Name, s.preAt().String())
 }
 
 func main() {
@@ -55,9 +88,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	db, err := sql.Open("mysql", conf.SphinxDatabase)
-	if err != nil {
-		log.Fatal(err)
+	client := &http.Client{
+		Timeout: 5 * time.Second,
 	}
 
 	log.Print("Listen for webhook")
@@ -66,73 +98,42 @@ func main() {
 
 	for update := range updates {
 		if update.Message != nil {
-			handleMessage(bot, db, update.Message)
+			handleMessage(bot, client, update.Message)
 		} else if update.EditedMessage != nil {
-			handleMessage(bot, db, update.EditedMessage)
+			handleMessage(bot, client, update.EditedMessage)
 		} else if update.InlineQuery != nil {
-			handleInline(bot, db, update.InlineQuery)
+			handleInline(bot, client, update.InlineQuery)
 		} else {
 			log.Printf("%+v\n", update)
 		}
 	}
 }
 
-type sphinxRow struct {
-	ID    int     `json:"id"`
-	Name  string  `json:"name"`
-	Team  string  `json:"team"`
-	Cat   string  `json:"cat"`
-	Genre string  `json:"genre"`
-	URL   string  `json:"url"`
-	Size  float64 `json:"size"`
-	Files int     `json:"files"`
-	PreAt int64   `json:"preAt"`
-	pre   time.Time
-	//Nuke  *nuke   `json:"nuke"`
-}
-
-func (s sphinxRow) short() string {
-	return fmt.Sprintf("%s %s", s.Name, s.pre.String())
-}
-
 var replacer = strings.NewReplacer("(", "\\(", ")", "\\)")
 
-func querySphinx(db *sql.DB, q string, max int) ([]sphinxRow, error) {
-	var rows *sql.Rows
-	var err error
-	if q == "" {
-		rows, err = db.Query("SELECT id, name, team, cat, genre, url, size, files, pre_at FROM pre_plain,pre_rt ORDER BY id DESC LIMIT " + strconv.Itoa(max) + " OPTION reverse_scan = 1")
-	} else {
-		rows, err = db.Query("SELECT id, name, team, cat, genre, url, size, files, pre_at FROM pre_plain,pre_rt WHERE MATCH(?) ORDER BY id DESC LIMIT "+strconv.Itoa(max)+" OPTION reverse_scan = 1", replacer.Replace(q))
-	}
+func querySphinx(client *http.Client, q string, max int) ([]sphinxRow, error) {
+	resp, err := client.Get(fmt.Sprintf("https://predb.ovh/api/v1/?q=%s&count=%d", q, max))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	res := make([]sphinxRow, 0)
-	for rows.Next() {
-		var r sphinxRow
-		err = rows.Scan(&r.ID, &r.Name, &r.Team, &r.Cat, &r.Genre, &r.URL, &r.Size, &r.Files, &r.PreAt)
-		if err != nil {
-			log.Print(err)
-			continue
-		}
+	var api apiResponse
 
-		r.pre = time.Unix(r.PreAt, 0)
-
-		res = append(res, r)
+	dec := json.NewDecoder(resp.Body)
+	dec.Decode(&api)
+	if api.Status != "success" {
+		return nil, errors.New("Internal error")
 	}
 
-	return res, nil
+	return api.Data.Rows, nil
 }
 
 const inlineMaxRes = 1
 
-func handleInline(bot *tgbotapi.BotAPI, db *sql.DB, iq *tgbotapi.InlineQuery) {
+func handleInline(bot *tgbotapi.BotAPI, client *http.Client, iq *tgbotapi.InlineQuery) {
 	log.Printf("%+v\n", iq)
 
-	rows, err := querySphinx(db, iq.Query, inlineMaxRes)
+	rows, err := querySphinx(client, iq.Query, inlineMaxRes)
 	if err != nil {
 		log.Print(err)
 		return
@@ -156,7 +157,7 @@ func handleInline(bot *tgbotapi.BotAPI, db *sql.DB, iq *tgbotapi.InlineQuery) {
 
 const directMaxRes = 5
 
-func handleMessage(bot *tgbotapi.BotAPI, db *sql.DB, m *tgbotapi.Message) {
+func handleMessage(bot *tgbotapi.BotAPI, client *http.Client, m *tgbotapi.Message) {
 	log.Printf("%+v\n", m)
 
 	if len(m.Text) == 0 {
@@ -164,7 +165,7 @@ func handleMessage(bot *tgbotapi.BotAPI, db *sql.DB, m *tgbotapi.Message) {
 	}
 
 	if m.IsCommand() {
-		handleCommand(bot, db, m, m.Command(), m.CommandArguments())
+		handleCommand(bot, client, m, m.Command(), m.CommandArguments())
 		return
 	}
 
@@ -173,7 +174,7 @@ func handleMessage(bot *tgbotapi.BotAPI, db *sql.DB, m *tgbotapi.Message) {
 		return
 	}
 
-	rows, err := querySphinx(db, m.Text, directMaxRes)
+	rows, err := querySphinx(client, m.Text, directMaxRes)
 	if err != nil {
 		log.Print(err)
 		return
@@ -184,7 +185,7 @@ func handleMessage(bot *tgbotapi.BotAPI, db *sql.DB, m *tgbotapi.Message) {
 	}
 }
 
-func handleCommand(bot *tgbotapi.BotAPI, db *sql.DB, m *tgbotapi.Message, command, args string) {
+func handleCommand(bot *tgbotapi.BotAPI, client *http.Client, m *tgbotapi.Message, command, args string) {
 	if !(m.Chat.IsPrivate() || strings.HasPrefix(m.Text, "/"+command+"@"+bot.Self.UserName)) {
 		return
 	}
@@ -197,7 +198,7 @@ func handleCommand(bot *tgbotapi.BotAPI, db *sql.DB, m *tgbotapi.Message, comman
 	case "ping":
 		handleCommandPing(bot, m)
 	case "query":
-		handleCommandQuery(bot, db, m, args)
+		handleCommandQuery(bot, client, m, args)
 	default:
 		handleCommandUnknown(bot, m)
 	}
@@ -228,8 +229,8 @@ func handleCommandPing(bot *tgbotapi.BotAPI, m *tgbotapi.Message) {
 
 const queryMaxRes = 3
 
-func handleCommandQuery(bot *tgbotapi.BotAPI, db *sql.DB, m *tgbotapi.Message, args string) {
-	rows, err := querySphinx(db, args, queryMaxRes)
+func handleCommandQuery(bot *tgbotapi.BotAPI, client *http.Client, m *tgbotapi.Message, args string) {
+	rows, err := querySphinx(client, args, queryMaxRes)
 	if err != nil {
 		log.Print(err)
 		return
