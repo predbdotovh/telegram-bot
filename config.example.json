@@ -2,5 +2,6 @@
     "Token": "Botfather authkey",
     "WebhookHost": "https://google.com:18443",
     "WebhookRoot": "/",
-    "LocalListen": "127.0.0.1:18442"
+    "LocalListen": "127.0.0.1:18442",
+    "SphinxDatabase": "tcp(127.0.0.1:3306)"
 }
