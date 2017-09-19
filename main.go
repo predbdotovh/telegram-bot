@@ -79,8 +79,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	bot.Debug = true
-
+	// bot.Debug = true
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
 	_, err = bot.SetWebhook(tgbotapi.NewWebhook(conf.WebhookHost + conf.WebhookRoot + bot.Token))
@@ -122,6 +121,7 @@ func querySphinx(client *http.Client, q string, max int) ([]sphinxRow, error) {
 	dec := json.NewDecoder(resp.Body)
 	dec.Decode(&api)
 	if api.Status != "success" {
+		log.Println(resp.Body)
 		return nil, errors.New("Internal error")
 	}
 
@@ -131,7 +131,7 @@ func querySphinx(client *http.Client, q string, max int) ([]sphinxRow, error) {
 const inlineMaxRes = 1
 
 func handleInline(bot *tgbotapi.BotAPI, client *http.Client, iq *tgbotapi.InlineQuery) {
-	log.Printf("%+v\n", iq)
+	log.Printf("i> %s [%d] : %s\n", iq.From, iq.From.ID, iq.Query)
 
 	rows, err := querySphinx(client, iq.Query, inlineMaxRes)
 	if err != nil {
@@ -148,8 +148,8 @@ func handleInline(bot *tgbotapi.BotAPI, client *http.Client, iq *tgbotapi.Inline
 		Results:       res,
 	}
 
-	response, err := bot.AnswerInlineQuery(answer)
-	log.Print(response)
+	log.Printf("i< Send back %d results\n", len(res))
+	_, err = bot.AnswerInlineQuery(answer)
 	if err != nil {
 		log.Print(err)
 	}
@@ -158,7 +158,7 @@ func handleInline(bot *tgbotapi.BotAPI, client *http.Client, iq *tgbotapi.Inline
 const directMaxRes = 5
 
 func handleMessage(bot *tgbotapi.BotAPI, client *http.Client, m *tgbotapi.Message) {
-	log.Printf("%+v\n", m)
+	log.Printf("m> %s [%d] : %s\n", m.From, m.From.ID, m.Text)
 
 	if len(m.Text) == 0 {
 		return
@@ -180,6 +180,7 @@ func handleMessage(bot *tgbotapi.BotAPI, client *http.Client, m *tgbotapi.Messag
 		return
 	}
 
+	log.Printf("m< Send back %d results\n", len(rows))
 	for _, row := range rows {
 		bot.Send(tgbotapi.NewMessage(m.Chat.ID, row.short()))
 	}
