@@ -119,7 +119,11 @@ func querySphinx(client *http.Client, q string, max int) ([]sphinxRow, error) {
 	var api apiResponse
 
 	dec := json.NewDecoder(resp.Body)
-	dec.Decode(&api)
+	err = dec.Decode(&api)
+	if err != nil {
+		return nil, err
+	}
+
 	if api.Status != "success" {
 		log.Println(resp.Body)
 		return nil, errors.New("Internal error")
