@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -111,7 +112,7 @@ func main() {
 var replacer = strings.NewReplacer("(", "\\(", ")", "\\)")
 
 func querySphinx(client *http.Client, q string, max int) ([]sphinxRow, error) {
-	resp, err := client.Get(fmt.Sprintf("https://predb.ovh/api/v1/?q=%s&count=%d", q, max))
+	resp, err := client.Get(fmt.Sprintf("https://predb.ovh/api/v1/?q=%s&count=%d", url.QueryEscape(q), max))
 	if err != nil {
 		return nil, err
 	}
