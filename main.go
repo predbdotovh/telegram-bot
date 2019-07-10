@@ -11,16 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/telegram-bot-api.v4"
+	_ "github.com/joho/godotenv/autoload"
+	tgbotapi "gopkg.in/telegram-bot-api.v4"
 )
-
-type configuration struct {
-	Token          string
-	WebhookHost    string
-	WebhookRoot    string
-	LocalListen    string
-	SphinxDatabase string
-}
 
 type apiResponse struct {
 	Status  string     `json:"status"`
@@ -57,25 +50,19 @@ func (s sphinxRow) short() string {
 	return fmt.Sprintf("%s %s", s.Name, s.preAt().String())
 }
 
+var preAPIQuery string
+
 func main() {
-	log.Print("Hello")
+	log.Print("Read configuration")
 
-	log.Print("Open file")
-	file, err := os.Open("conf/telegram-bot.config.json")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Print("Decode file")
-	decoder := json.NewDecoder(file)
-	conf := configuration{}
-	err = decoder.Decode(&conf)
-	if err != nil {
-		log.Fatal(err)
-	}
+	webhookListen := getEnv("WEBHOOK_LISTEN", "127.0.0.1:18442")
+	webhookHost := getEnv("WEBHOOK_HOST", "")
+	webhookRoot := getEnv("WEBHOOK_ROOT", "/")
+	botToken := getEnv("BOT_TOKEN", "")
+	preAPIQuery = getEnv("PRE_API_QUERY", "https://predb.ovh/api/v1/?q=%s&count=%d")
 
 	log.Print("Init bot API")
-	bot, err := tgbotapi.NewBotAPI(conf.Token)
+	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -83,7 +70,7 @@ func main() {
 	// bot.Debug = true
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
-	_, err = bot.SetWebhook(tgbotapi.NewWebhook(conf.WebhookHost + conf.WebhookRoot + bot.Token))
+	_, err = bot.SetWebhook(tgbotapi.NewWebhook(webhookHost + webhookRoot + bot.Token))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -93,8 +80,8 @@ func main() {
 	}
 
 	log.Print("Listen for webhook")
-	updates := bot.ListenForWebhook(conf.WebhookRoot + bot.Token)
-	go http.ListenAndServe(conf.LocalListen, nil)
+	updates := bot.ListenForWebhook(webhookRoot + bot.Token)
+	go http.ListenAndServe(webhookListen, nil)
 
 	for update := range updates {
 		if update.Message != nil {
@@ -112,7 +99,7 @@ func main() {
 var replacer = strings.NewReplacer("(", "\\(", ")", "\\)")
 
 func querySphinx(client *http.Client, q string, max int) ([]sphinxRow, error) {
-	resp, err := client.Get(fmt.Sprintf("https://predb.ovh/api/v1/?q=%s&count=%d", url.QueryEscape(q), max))
+	resp, err := client.Get(fmt.Sprintf(preAPIQuery, url.QueryEscape(q), max))
 	if err != nil {
 		return nil, err
 	}
@@ -250,4 +237,15 @@ func handleCommandQuery(bot *tgbotapi.BotAPI, client *http.Client, m *tgbotapi.M
 func handleCommandUnknown(bot *tgbotapi.BotAPI, m *tgbotapi.Message) {
 	msg := tgbotapi.NewMessage(m.Chat.ID, "I didn't understand that. List available commands with /help")
 	bot.Send(msg)
+}
+
+func getEnv(key, defaultValue string) string {
+	value, exists := os.LookupEnv(key)
+	if !exists {
+		if defaultValue == "" {
+			log.Fatal("Missing mandatory env variable : " + key)
+		}
+		return defaultValue
+	}
+	return value
 }
